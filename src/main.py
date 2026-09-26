@@ -1,5 +1,6 @@
-"""Эмулятор командной оболочки UNIX-подобной ОС (этап 1: REPL)."""
+"""Эмулятор командной оболочки UNIX-подобной ОС."""
 
+import argparse
 import getpass
 import os
 import socket
@@ -11,6 +12,40 @@ PATH_SEPARATOR = "/"
 PROMPT_END = "$ "
 EXIT_COMMAND = "exit"
 EXIT_SUCCESS = 0
+SCRIPT_ENCODING = "utf-8"
+
+
+def create_argument_parser():
+    """Создаёт парсер параметров командной строки."""
+    parser = argparse.ArgumentParser(
+        description="UNIX-like shell emulator"
+    )
+    parser.add_argument(
+        "--vfs-path",
+        help="path to the physical VFS location",
+    )
+    parser.add_argument(
+        "--prompt",
+        help="custom input prompt",
+    )
+    parser.add_argument(
+        "--script",
+        help="path to the startup script",
+    )
+    return parser
+
+
+def parse_arguments(arguments=None):
+    """Разбирает параметры командной строки."""
+    return create_argument_parser().parse_args(arguments)
+
+
+def print_configuration(config):
+    """Выводит заданные параметры для отладки."""
+    print("Configuration:")
+    print(f"  VFS path: {config.vfs_path}")
+    print(f"  Prompt: {config.prompt}")
+    print(f"  Startup script: {config.script}")
 
 
 def get_username():
@@ -44,8 +79,10 @@ def get_current_dir():
     return cwd.replace(os.sep, PATH_SEPARATOR)
 
 
-def get_prompt():
-    """Формирует приглашение к вводу вида «username@hostname:~$ »."""
+def get_prompt(custom_prompt=None):
+    """Возвращает пользовательское или стандартное приглашение."""
+    if custom_prompt is not None:
+        return custom_prompt
     user = get_username()
     host = get_hostname()
     directory = get_current_dir()
@@ -102,28 +139,57 @@ def execute_command(name, args):
     return True
 
 
-def run_repl():
+def execute_line(line):
+    """Разбирает и выполняет одну строку команды."""
+    name, args = parse_command(line)
+    if not name:
+        return True
+    return execute_command(name, args)
+
+
+def run_startup_script(script_path, custom_prompt=None):
+    """Выполняет команды стартового скрипта по порядку."""
+    try:
+        with open(script_path, encoding=SCRIPT_ENCODING) as script:
+            for raw_line in script:
+                line = raw_line.rstrip("\r\n")
+                print(f"{get_prompt(custom_prompt)}{line}")
+                if not execute_line(line):
+                    return False
+    except (OSError, UnicodeError) as error:
+        print(f"Startup script error: {error}")
+    return True
+
+
+def run_repl(custom_prompt=None):
     """Запускает цикл «чтение — выполнение — вывод».
 
     Ctrl+D завершает работу, Ctrl+C сбрасывает текущую строку ввода.
     """
     while True:
         try:
-            line = input(get_prompt())
+            line = input(get_prompt(custom_prompt))
         except EOFError:
             print()
             break
         except KeyboardInterrupt:
             print()
             continue
-        name, args = parse_command(line)
-        if name and not execute_command(name, args):
+        if not execute_line(line):
             break
 
 
-def main():
-    """Точка входа: запускает REPL и возвращает код завершения."""
-    run_repl()
+def main(arguments=None):
+    """Читает настройки, выполняет скрипт и запускает REPL."""
+    config = parse_arguments(arguments)
+    print_configuration(config)
+    if config.script is not None:
+        should_continue = run_startup_script(
+            config.script, config.prompt
+        )
+        if not should_continue:
+            return EXIT_SUCCESS
+    run_repl(config.prompt)
     return EXIT_SUCCESS
 
 

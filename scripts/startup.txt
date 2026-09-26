@@ -1,0 +1,5 @@
+ls one.txt
+unknown_command
+cd documents
+ls -l
+exit

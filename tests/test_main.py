@@ -1,7 +1,8 @@
-"""Тесты эмулятора командной оболочки (этап 1)."""
+"""Тесты эмулятора командной оболочки."""
 
 import io
 import os
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -53,6 +54,10 @@ class PromptTests(unittest.TestCase):
                     shell, "get_current_dir", return_value="~/work"
                 ):
                     self.assertEqual(shell.get_prompt(), "alice@pc:~/work$ ")
+
+    def test_custom_prompt(self):
+        """Пользовательское приглашение заменяет стандартное."""
+        self.assertEqual(shell.get_prompt("vfs> "), "vfs> ")
 
     def test_username_fallback(self):
         """Если имя пользователя не определить, берётся запасное значение."""
@@ -132,6 +137,104 @@ class ExecuteCommandTests(unittest.TestCase):
         self.assertEqual(output, "foo: command not found\n")
 
 
+class ConfigurationTests(unittest.TestCase):
+    """Проверка параметров командной строки и их вывода."""
+
+    def test_default_arguments(self):
+        """Без флагов все пользовательские настройки не заданы."""
+        config = shell.parse_arguments([])
+        self.assertIsNone(config.vfs_path)
+        self.assertIsNone(config.prompt)
+        self.assertIsNone(config.script)
+
+    def test_all_arguments(self):
+        """Все поддерживаемые флаги сохраняют переданные значения."""
+        config = shell.parse_arguments(
+            [
+                "--vfs-path",
+                "vfs.xml",
+                "--prompt",
+                "demo> ",
+                "--script",
+                "startup.txt",
+            ]
+        )
+        self.assertEqual(config.vfs_path, "vfs.xml")
+        self.assertEqual(config.prompt, "demo> ")
+        self.assertEqual(config.script, "startup.txt")
+
+    def test_configuration_output(self):
+        """При запуске выводятся все три параметра."""
+        config = shell.parse_arguments(
+            ["--vfs-path", "vfs.xml", "--prompt", "demo> "]
+        )
+        _, output = call_and_capture(shell.print_configuration, config)
+        self.assertEqual(
+            output,
+            "Configuration:\n"
+            "  VFS path: vfs.xml\n"
+            "  Prompt: demo> \n"
+            "  Startup script: None\n",
+        )
+
+
+class StartupScriptTests(unittest.TestCase):
+    """Проверка последовательного выполнения стартового скрипта."""
+
+    def setUp(self):
+        """Создаёт временный каталог для файлов сценариев."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        """Удаляет временные файлы сценариев."""
+        self.temp_dir.cleanup()
+
+    def create_script(self, contents):
+        """Создаёт стартовый скрипт с заданным содержимым."""
+        path = os.path.join(self.temp_dir.name, "startup.txt")
+        with open(path, "w", encoding=shell.SCRIPT_ENCODING) as script:
+            script.write(contents)
+        return path
+
+    def test_commands_and_errors_are_shown(self):
+        """После ошибочной команды выполняются следующие строки."""
+        path = self.create_script("ls one\nunknown\ncd docs\n")
+        result, output = call_and_capture(
+            shell.run_startup_script, path, "demo> "
+        )
+        self.assertTrue(result)
+        self.assertEqual(
+            output,
+            "demo> ls one\n"
+            "Command: ls\n"
+            "Arguments: ['one']\n"
+            "demo> unknown\n"
+            "unknown: command not found\n"
+            "demo> cd docs\n"
+            "Command: cd\n"
+            "Arguments: ['docs']\n",
+        )
+
+    def test_exit_stops_script(self):
+        """Команда exit не позволяет выполнить оставшиеся строки."""
+        path = self.create_script("exit\nls ignored\n")
+        result, output = call_and_capture(
+            shell.run_startup_script, path, "demo> "
+        )
+        self.assertFalse(result)
+        self.assertEqual(output, "demo> exit\n")
+
+    def test_missing_script_reports_error(self):
+        """Ошибка открытия сценария выводится, работа может продолжиться."""
+        path = os.path.join(self.temp_dir.name, "missing.txt")
+        result, output = call_and_capture(
+            shell.run_startup_script, path, "demo> "
+        )
+        self.assertTrue(result)
+        self.assertIn("Startup script error:", output)
+        self.assertIn("missing.txt", output)
+
+
 class ReplTests(unittest.TestCase):
     """Проверка цикла чтения и выполнения команд."""
 
@@ -166,6 +269,14 @@ class ReplTests(unittest.TestCase):
         self.assertEqual(output, "\n")
         self.assertEqual(self.fake_input.call_count, 2)
 
+    def test_custom_prompt_is_used(self):
+        """REPL передаёт input пользовательское приглашение."""
+        with mock.patch(
+            "builtins.input", side_effect=["exit"]
+        ) as fake_input:
+            call_and_capture(shell.run_repl, "demo> ")
+        fake_input.assert_called_once_with("demo> ")
+
 
 class MainTests(unittest.TestCase):
     """Проверка точки входа."""
@@ -173,8 +284,31 @@ class MainTests(unittest.TestCase):
     def test_main_returns_success(self):
         """main возвращает код успешного завершения."""
         with mock.patch("builtins.input", side_effect=["exit"]):
-            result, _ = call_and_capture(shell.main)
+            result, _ = call_and_capture(shell.main, [])
         self.assertEqual(result, shell.EXIT_SUCCESS)
+
+    def test_main_runs_script_before_repl(self):
+        """exit в стартовом сценарии завершает эмулятор до REPL."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "startup.txt")
+            with open(
+                path, "w", encoding=shell.SCRIPT_ENCODING
+            ) as script:
+                script.write("exit\n")
+            arguments = [
+                "--vfs-path",
+                "vfs.xml",
+                "--prompt",
+                "demo> ",
+                "--script",
+                path,
+            ]
+            result, output = call_and_capture(shell.main, arguments)
+        self.assertEqual(result, shell.EXIT_SUCCESS)
+        self.assertIn("VFS path: vfs.xml", output)
+        self.assertIn("Prompt: demo> ", output)
+        self.assertIn(f"Startup script: {path}", output)
+        self.assertTrue(output.endswith("demo> exit\n"))
 
 
 if __name__ == "__main__":
