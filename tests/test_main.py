@@ -4,10 +4,13 @@ import io
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 from unittest import mock
 
 from src import main as shell
+from pathlib import Path
+
+VFS_PATH = str(Path(__file__).resolve().parents[1] / "vfs" / "minimal.xml")
 
 
 def call_and_capture(func, *args):
@@ -141,9 +144,9 @@ class ConfigurationTests(unittest.TestCase):
     """Проверка параметров командной строки и их вывода."""
 
     def test_default_arguments(self):
-        """Без флагов все пользовательские настройки не заданы."""
-        config = shell.parse_arguments([])
-        self.assertIsNone(config.vfs_path)
+        """Остальные параметры необязательны."""
+        config = shell.parse_arguments(["--vfs-path", VFS_PATH])
+        self.assertEqual(config.vfs_path, VFS_PATH)
         self.assertIsNone(config.prompt)
         self.assertIsNone(config.script)
 
@@ -281,10 +284,46 @@ class ReplTests(unittest.TestCase):
 class MainTests(unittest.TestCase):
     """Проверка точки входа."""
 
+    def test_missing_vfs_parameter(self):
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as error:
+                shell.main([])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_vfs_error_stops_before_script_and_repl(self):
+        with mock.patch.object(shell, "run_startup_script") as script:
+            with mock.patch.object(shell, "run_repl") as repl:
+                result, output = call_and_capture(shell.main, [
+                    "--vfs-path", VFS_PATH + ".missing", "--script", "startup.txt"
+                ])
+        self.assertEqual(result, 1)
+        self.assertIn("VFS error:", output)
+        script.assert_not_called()
+        repl.assert_not_called()
+
+    def test_invalid_vfs_stops_before_repl(self):
+        path = str(Path(VFS_PATH).with_name("invalid.xml"))
+        with mock.patch.object(shell, "run_repl") as repl:
+            result, output = call_and_capture(shell.main, ["--vfs-path", path])
+        self.assertEqual(result, 1)
+        self.assertIn("VFS error:", output)
+        repl.assert_not_called()
+
+    def test_vfs_is_loaded_before_startup_script(self):
+        with mock.patch.object(shell, "load_vfs", wraps=shell.load_vfs) as loader:
+            def run_script(*args):
+                loader.assert_called_once_with(VFS_PATH)
+                return False
+            with mock.patch.object(shell, "run_startup_script", side_effect=run_script):
+                result, _ = call_and_capture(shell.main, [
+                    "--vfs-path", VFS_PATH, "--script", "startup.txt"
+                ])
+        self.assertEqual(result, 0)
+
     def test_main_returns_success(self):
         """main возвращает код успешного завершения."""
         with mock.patch("builtins.input", side_effect=["exit"]):
-            result, _ = call_and_capture(shell.main, [])
+            result, _ = call_and_capture(shell.main, ["--vfs-path", VFS_PATH])
         self.assertEqual(result, shell.EXIT_SUCCESS)
 
     def test_main_runs_script_before_repl(self):
@@ -297,7 +336,7 @@ class MainTests(unittest.TestCase):
                 script.write("exit\n")
             arguments = [
                 "--vfs-path",
-                "vfs.xml",
+                VFS_PATH,
                 "--prompt",
                 "demo> ",
                 "--script",
@@ -305,7 +344,7 @@ class MainTests(unittest.TestCase):
             ]
             result, output = call_and_capture(shell.main, arguments)
         self.assertEqual(result, shell.EXIT_SUCCESS)
-        self.assertIn("VFS path: vfs.xml", output)
+        self.assertIn(f"VFS path: {VFS_PATH}", output)
         self.assertIn("Prompt: demo> ", output)
         self.assertIn(f"Startup script: {path}", output)
         self.assertTrue(output.endswith("demo> exit\n"))
@@ -313,3 +352,4 @@ class MainTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

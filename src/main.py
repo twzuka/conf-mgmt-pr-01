@@ -6,6 +6,11 @@ import os
 import socket
 import sys
 
+if __package__:
+    from .vfs import VFSError, count_nodes, load_vfs
+else:
+    from vfs import VFSError, count_nodes, load_vfs
+
 DEFAULT_USER = "user"
 HOME_MARK = "~"
 PATH_SEPARATOR = "/"
@@ -22,6 +27,7 @@ def create_argument_parser():
     )
     parser.add_argument(
         "--vfs-path",
+        required=True,
         help="path to the physical VFS location",
     )
     parser.add_argument(
@@ -183,6 +189,14 @@ def main(arguments=None):
     """Читает настройки, выполняет скрипт и запускает REPL."""
     config = parse_arguments(arguments)
     print_configuration(config)
+    try:
+        vfs_root = load_vfs(config.vfs_path)
+    except VFSError as error:
+        print(f"VFS error: {error}")
+        return 1
+    directories, files = count_nodes(vfs_root)
+    print(f"VFS loaded: {directories} directories, {files} files")
+    # vfs_root остаётся в памяти до завершения main.
     if config.script is not None:
         should_continue = run_startup_script(
             config.script, config.prompt
@@ -195,3 +209,4 @@ def main(arguments=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+
