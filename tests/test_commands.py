@@ -49,11 +49,17 @@ class CommandTests(unittest.TestCase):
     def test_ls_long_file_and_empty_directory(self):
         """Длинный вывод показывает тип и размер; пустой каталог допустим."""
         _, output = self.run_line("ls -l alpha")
-        self.assertEqual(output, "- 18 alpha\n")
+        fields = output.split()
+        self.assertEqual(fields[0], "-")
+        self.assertEqual(fields[3], "18")
+        self.assertEqual(fields[-1], "alpha")
         _, output = self.run_line("ls empty")
         self.assertEqual(output, "")
         _, output = self.run_line("ls -al docs")
-        self.assertEqual(output, "d 0 leaf\n")
+        fields = output.split()
+        self.assertEqual(fields[0], "d")
+        self.assertEqual(fields[3], "0")
+        self.assertEqual(fields[-1], "leaf")
 
     def test_ls_multiple_paths_and_partial_error(self):
         """Ошибка одного пути не мешает перечислению остальных."""

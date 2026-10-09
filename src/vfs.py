@@ -2,24 +2,46 @@
 
 import base64
 import binascii
+import getpass
+import time
 from dataclasses import dataclass, field
 import xml.etree.ElementTree as ET
 
 
+DEFAULT_OWNER = "user"
+DEFAULT_GROUP = "users"
+
+
+def default_owner():
+    """Возвращает начального владельца из ОС или запасное имя user."""
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError, ImportError):
+        return DEFAULT_OWNER
+
+
 @dataclass
 class File:
-    """Виртуальный файл: имя и содержимое в байтах."""
+    """Виртуальный файл: байты, владелец, группа и временные метки."""
 
     name: str
     data: bytes
+    owner: str = field(default_factory=default_owner)
+    group: str = DEFAULT_GROUP
+    accessed: float = field(default_factory=time.time)
+    modified: float = field(default_factory=time.time)
 
 
 @dataclass
 class Directory:
-    """Виртуальная папка: имя и словарь вложенных элементов."""
+    """Виртуальный каталог: дочерние узлы, владелец и временные метки."""
 
     name: str
     children: dict = field(default_factory=dict)
+    owner: str = field(default_factory=default_owner)
+    group: str = DEFAULT_GROUP
+    accessed: float = field(default_factory=time.time)
+    modified: float = field(default_factory=time.time)
 
 
 class VFSError(Exception):

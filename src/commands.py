@@ -1,5 +1,6 @@
 """Основные команды UNIX-подобной оболочки над VFS в памяти."""
 
+from datetime import datetime, timezone
 import time
 
 from .options import (
@@ -32,12 +33,14 @@ def list_entries(node, path, show_all):
 
 
 def format_entry(name, node, long_format):
-    """Форматирует имя либо тип, размер в байтах и имя узла."""
+    """Форматирует имя либо тип, владельца, группу, размер и время UTC."""
     if not long_format:
         return name
     kind = "d" if isinstance(node, Directory) else "-"
     size = 0 if isinstance(node, Directory) else len(node.data)
-    return f"{kind} {size} {name}"
+    modified = datetime.fromtimestamp(node.modified, timezone.utc)
+    stamp = modified.isoformat(timespec="seconds")
+    return f"{kind} {node.owner} {node.group} {size} {stamp} {name}"
 
 
 def command_ls(state, args):
