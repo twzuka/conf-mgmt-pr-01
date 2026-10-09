@@ -9,6 +9,8 @@ from pathlib import Path
 from unittest import mock
 
 from src import main as shell
+from src.session import ShellState
+from src.vfs import Directory, load_vfs
 
 VFS_PATH = str(Path(__file__).resolve().parents[1] / "vfs" / "minimal.xml")
 
@@ -100,41 +102,44 @@ class CurrentDirTests(unittest.TestCase):
 
 
 class ExecuteCommandTests(unittest.TestCase):
-    """Проверка выполнения команд."""
+    """Проверка встроенных команд, ошибок и завершения сеанса."""
+
+    def setUp(self):
+        """Загружает тестовую VFS."""
+        self.state = ShellState(load_vfs(VFS_PATH))
 
     def test_exit_stops_shell(self):
-        """Команда exit сообщает о необходимости завершения."""
-        result, output = call_and_capture(shell.execute_command, "exit", [])
+        """exit без аргументов завершает сеанс."""
+        result, output = call_and_capture(
+            shell.execute_command, "exit", [], self.state
+        )
         self.assertFalse(result)
         self.assertEqual(output, "")
 
-    def test_ls_stub(self):
-        """Заглушка ls выводит своё имя и аргументы."""
+    def test_ls_lists_vfs(self):
+        """ls выводит содержимое виртуального каталога."""
         result, output = call_and_capture(
-            shell.execute_command, "ls", ["a.txt", "b.txt"]
+            shell.execute_command, "ls", [], self.state
         )
         self.assertTrue(result)
-        self.assertEqual(
-            output, "Command: ls\nArguments: ['a.txt', 'b.txt']\n"
-        )
+        self.assertEqual(output, "hello.txt\n")
 
-    def test_cd_stub(self):
-        """Заглушка cd выводит своё имя и аргументы."""
+    def test_cd_changes_virtual_directory(self):
+        """cd изменяет состояние VFS без смены реального каталога."""
+        self.state.root.children["docs"] = Directory("docs")
+        cwd = os.getcwd()
         result, output = call_and_capture(
-            shell.execute_command, "cd", ["docs"]
+            shell.execute_command, "cd", ["docs"], self.state
         )
         self.assertTrue(result)
-        self.assertEqual(output, "Command: cd\nArguments: ['docs']\n")
-
-    def test_stub_without_arguments(self):
-        """Заглушка без аргументов выводит пустой список."""
-        _, output = call_and_capture(shell.execute_command, "ls", [])
-        self.assertEqual(output, "Command: ls\nArguments: []\n")
+        self.assertEqual(output, "")
+        self.assertEqual(self.state.cwd, "/docs")
+        self.assertEqual(os.getcwd(), cwd)
 
     def test_unknown_command(self):
-        """Неизвестная команда даёт сообщение об ошибке, работа продолжается."""
+        """Неизвестная команда сообщает ошибку и продолжает сеанс."""
         result, output = call_and_capture(
-            shell.execute_command, "foo", ["bar"]
+            shell.execute_command, "foo", ["bar"], self.state
         )
         self.assertTrue(result)
         self.assertEqual(output, "foo: command not found\n")
@@ -187,6 +192,7 @@ class StartupScriptTests(unittest.TestCase):
     def setUp(self):
         """Создаёт временный каталог для файлов сценариев."""
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.state = ShellState(load_vfs(VFS_PATH))
 
     def tearDown(self):
         """Удаляет временные файлы сценариев."""
@@ -201,28 +207,26 @@ class StartupScriptTests(unittest.TestCase):
 
     def test_commands_and_errors_are_shown(self):
         """После ошибочной команды выполняются следующие строки."""
-        path = self.create_script("ls one\nunknown\ncd docs\n")
+        path = self.create_script("cat missing\nunknown\ncat hello.txt\n")
         result, output = call_and_capture(
-            shell.run_startup_script, path, "demo> "
+            shell.run_startup_script, path, self.state, "demo> "
         )
         self.assertTrue(result)
         self.assertEqual(
             output,
-            "demo> ls one\n"
-            "Command: ls\n"
-            "Arguments: ['one']\n"
+            "demo> cat missing\n"
+            "cat: missing: no such file or directory\n"
             "demo> unknown\n"
             "unknown: command not found\n"
-            "demo> cd docs\n"
-            "Command: cd\n"
-            "Arguments: ['docs']\n",
+            "demo> cat hello.txt\n"
+            "Привет из VFS!",
         )
 
     def test_exit_stops_script(self):
         """Команда exit не позволяет выполнить оставшиеся строки."""
         path = self.create_script("exit\nls ignored\n")
         result, output = call_and_capture(
-            shell.run_startup_script, path, "demo> "
+            shell.run_startup_script, path, self.state, "demo> "
         )
         self.assertFalse(result)
         self.assertEqual(output, "demo> exit\n")
@@ -231,7 +235,7 @@ class StartupScriptTests(unittest.TestCase):
         """Ошибка открытия сценария выводится, работа может продолжиться."""
         path = os.path.join(self.temp_dir.name, "missing.txt")
         result, output = call_and_capture(
-            shell.run_startup_script, path, "demo> "
+            shell.run_startup_script, path, self.state, "demo> "
         )
         self.assertTrue(result)
         self.assertIn("Startup script error:", output)
@@ -244,16 +248,17 @@ class ReplTests(unittest.TestCase):
     def run_with_input(self, inputs):
         """Запускает REPL с заданными вводами и возвращает вывод."""
         with mock.patch("builtins.input", side_effect=inputs) as fake_input:
-            _, output = call_and_capture(shell.run_repl)
+            state = ShellState(load_vfs(VFS_PATH))
+            _, output = call_and_capture(shell.run_repl, state)
         self.fake_input = fake_input
         return output
 
     def test_commands_then_exit(self):
         """Команды выполняются по очереди, пустые строки пропускаются."""
-        output = self.run_with_input(["ls x", "", "foo", "exit"])
+        output = self.run_with_input(["ls", "", "foo", "exit"])
         self.assertEqual(
             output,
-            "Command: ls\nArguments: ['x']\nfoo: command not found\n",
+            "hello.txt\nfoo: command not found\n",
         )
 
     def test_exit_stops_reading(self):
@@ -277,7 +282,9 @@ class ReplTests(unittest.TestCase):
         with mock.patch(
             "builtins.input", side_effect=["exit"]
         ) as fake_input:
-            call_and_capture(shell.run_repl, "demo> ")
+            call_and_capture(
+                shell.run_repl, ShellState(load_vfs(VFS_PATH)), "demo> "
+            )
         fake_input.assert_called_once_with("demo> ")
 
 
