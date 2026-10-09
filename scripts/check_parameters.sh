@@ -18,3 +18,4 @@ echo "=== all parameters ==="
 python3 "$APP" --vfs-path "$PROJECT_DIR/vfs/minimal.xml" \
     --prompt 'demo> ' --script "$STARTUP"
 
+

@@ -7,9 +7,18 @@ import socket
 import sys
 
 if __package__:
+    from .commands import COMMANDS
+    from .options import require_no_arguments
+    from .session import CommandError, ShellState
     from .vfs import VFSError, count_nodes, load_vfs
 else:
-    from vfs import VFSError, count_nodes, load_vfs
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src.commands import COMMANDS
+    from src.options import require_no_arguments
+    from src.session import CommandError, ShellState
+    from src.vfs import VFSError, count_nodes, load_vfs
 
 DEFAULT_USER = "user"
 HOME_MARK = "~"
@@ -17,6 +26,7 @@ PATH_SEPARATOR = "/"
 PROMPT_END = "$ "
 EXIT_COMMAND = "exit"
 EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
 SCRIPT_ENCODING = "utf-8"
 
 
@@ -85,13 +95,13 @@ def get_current_dir():
     return cwd.replace(os.sep, PATH_SEPARATOR)
 
 
-def get_prompt(custom_prompt=None):
+def get_prompt(custom_prompt=None, state=None):
     """Возвращает пользовательское или стандартное приглашение."""
     if custom_prompt is not None:
         return custom_prompt
     user = get_username()
     host = get_hostname()
-    directory = get_current_dir()
+    directory = state.cwd if state is not None else get_current_dir()
     return f"{user}@{host}:{directory}{PROMPT_END}"
 
 
@@ -107,81 +117,55 @@ def parse_command(line):
     return parts[0], parts[1:]
 
 
-def print_stub(name, args):
-    """Выводит имя команды-заглушки и переданные ей аргументы."""
-    print(f"Command: {name}")
-    print(f"Arguments: {args}")
-
-
-def command_ls(args):
-    """Заглушка команды ls."""
-    print_stub("ls", args)
-
-
-def command_cd(args):
-    """Заглушка команды cd."""
-    print_stub("cd", args)
-
-
-COMMANDS = {
-    "ls": command_ls,
-    "cd": command_cd,
-}
-
-
-def execute_command(name, args):
-    """Выполняет команду.
-
-    Возвращает False, если эмулятор нужно завершить (команда exit),
-    иначе True. Для неизвестной команды выводит сообщение об ошибке.
-    """
-    if name == EXIT_COMMAND:
-        return False
-    handler = COMMANDS.get(name)
-    if handler is None:
-        print(f"{name}: command not found")
-    else:
-        handler(args)
+def execute_command(name, args, state):
+    """Выполняет команду; ошибки сообщаются, exit завершает сеанс."""
+    try:
+        if name == EXIT_COMMAND:
+            require_no_arguments(args)
+            return False
+        handler = COMMANDS.get(name)
+        if handler is None:
+            raise CommandError("command not found")
+        handler(state, args)
+    except CommandError as error:
+        print(f"{name}: {error}")
     return True
 
 
-def execute_line(line):
+def execute_line(line, state):
     """Разбирает и выполняет одну строку команды."""
     name, args = parse_command(line)
     if not name:
         return True
-    return execute_command(name, args)
+    return execute_command(name, args, state)
 
 
-def run_startup_script(script_path, custom_prompt=None):
-    """Выполняет команды стартового скрипта по порядку."""
+def run_startup_script(script_path, state, custom_prompt=None):
+    """Выполняет сценарий в общем состоянии оболочки, пропуская ошибки."""
     try:
         with open(script_path, encoding=SCRIPT_ENCODING) as script:
             for raw_line in script:
                 line = raw_line.rstrip("\r\n")
-                print(f"{get_prompt(custom_prompt)}{line}")
-                if not execute_line(line):
+                print(f"{get_prompt(custom_prompt, state)}{line}")
+                if not execute_line(line, state):
                     return False
     except (OSError, UnicodeError) as error:
         print(f"Startup script error: {error}")
     return True
 
 
-def run_repl(custom_prompt=None):
-    """Запускает цикл «чтение — выполнение — вывод».
-
-    Ctrl+D завершает работу, Ctrl+C сбрасывает текущую строку ввода.
-    """
+def run_repl(state, custom_prompt=None):
+    """Запускает REPL: Ctrl+D завершает работу, Ctrl+C сбрасывает ввод."""
     while True:
         try:
-            line = input(get_prompt(custom_prompt))
+            line = input(get_prompt(custom_prompt, state))
         except EOFError:
             print()
             break
         except KeyboardInterrupt:
             print()
             continue
-        if not execute_line(line):
+        if not execute_line(line, state):
             break
 
 
@@ -193,16 +177,17 @@ def main(arguments=None):
         vfs_root = load_vfs(config.vfs_path)
     except VFSError as error:
         print(f"VFS error: {error}")
-        return 1
+        return EXIT_FAILURE
     directories, files = count_nodes(vfs_root)
     print(f"VFS loaded: {directories} directories, {files} files")
+    state = ShellState(vfs_root)
     if config.script is not None:
         should_continue = run_startup_script(
-            config.script, config.prompt
+            config.script, state, config.prompt
         )
         if not should_continue:
             return EXIT_SUCCESS
-    run_repl(config.prompt)
+    run_repl(state, config.prompt)
     return EXIT_SUCCESS
 
 

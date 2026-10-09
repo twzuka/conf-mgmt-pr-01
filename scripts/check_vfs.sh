@@ -18,3 +18,4 @@ echo "=== missing startup script ==="
 printf 'exit\n' | python3 "$APP" --vfs-path "$PROJECT_DIR/vfs/minimal.xml" \
     --script "$SCRIPT_DIR/missing.txt"
 echo "Exit code: $?"
+
