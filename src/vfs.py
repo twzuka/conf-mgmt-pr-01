@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 @dataclass
 class File:
     """Виртуальный файл: имя и содержимое в байтах."""
+
     name: str
     data: bytes
 
@@ -16,6 +17,7 @@ class File:
 @dataclass
 class Directory:
     """Виртуальная папка: имя и словарь вложенных элементов."""
+
     name: str
     children: dict = field(default_factory=dict)
 
@@ -24,48 +26,76 @@ class VFSError(Exception):
     """Ошибка чтения или формата VFS."""
 
 
-def read_directory(element, name):
-    """Рекурсивно читает содержимое папки."""
-    directory = Directory(name)
-    if element.text and element.text.strip():
+def validate_text(text):
+    """Запрещает текст вне элемента file, кроме пробельных символов."""
+    if text and text.strip():
         raise VFSError("Текст должен находиться внутри элемента file")
+
+
+def validate_name(name):
+    """Проверяет непустое имя без разделителей и специальных компонентов."""
+    if not name.strip() or name in (".", ".."):
+        raise VFSError(f"Недопустимое имя: {name!r}")
+    if "/" in name or "\\" in name:
+        raise VFSError(f"Недопустимое имя: {name!r}")
+
+
+def validate_child(element, directory):
+    """Проверяет тег, имя, атрибуты и уникальность вложенного элемента."""
+    if element.tag not in ("directory", "file"):
+        raise VFSError(f"Неизвестный элемент: {element.tag}")
+    name = element.get("name", "")
+    validate_name(name)
+    if name in directory.children:
+        raise VFSError(f"Повторяющееся имя: {name}")
+    allowed = {"name"}
+    if element.tag == "file":
+        allowed.add("encoding")
+    if set(element.attrib) - allowed:
+        raise VFSError(f"Неизвестный атрибут у {name}")
+    validate_text(element.tail)
+    return name
+
+
+def decode_base64(text, name):
+    """Декодирует base64 с пробельными символами или сообщает об ошибке."""
+    try:
+        return base64.b64decode("".join(text.split()), validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise VFSError(f"Неверный base64 в файле {name}") from error
+
+
+def read_file(element, name):
+    """Читает текстовый или двоичный файл без вложенных XML-элементов."""
+    if len(element):
+        raise VFSError(f"Файл {name} не может содержать элементы XML")
+    encoding = element.get("encoding", "text")
+    text = element.text or ""
+    if encoding == "text":
+        data = text.encode("utf-8")
+    elif encoding == "base64":
+        data = decode_base64(text, name)
+    else:
+        raise VFSError(f"Неизвестная кодировка: {encoding}")
+    return File(name, data)
+
+
+def read_directory(element, name):
+    """Рекурсивно строит дерево каталогов и файлов в памяти."""
+    directory = Directory(name)
+    validate_text(element.text)
     for child in element:
-        if child.tag not in ("directory", "file"):
-            raise VFSError(f"Неизвестный элемент: {child.tag}")
-        child_name = child.get("name", "")
-        if (not child_name.strip() or child_name in (".", "..")
-                or "/" in child_name or "\\" in child_name):
-            raise VFSError(f"Недопустимое имя: {child_name!r}")
-        if child_name in directory.children:
-            raise VFSError(f"Повторяющееся имя: {child_name}")
-        allowed = {"name"} if child.tag == "directory" else {"name", "encoding"}
-        if set(child.attrib) - allowed:
-            raise VFSError(f"Неизвестный атрибут у {child_name}")
-        if child.tail and child.tail.strip():
-            raise VFSError("Текст должен находиться внутри элемента file")
+        child_name = validate_child(child, directory)
         if child.tag == "directory":
             node = read_directory(child, child_name)
         else:
-            if len(child):
-                raise VFSError(f"Файл {child_name} не может содержать элементы XML")
-            encoding = child.get("encoding", "text")
-            text = child.text or ""
-            if encoding == "text":
-                data = text.encode("utf-8")
-            elif encoding == "base64":
-                try:
-                    data = base64.b64decode("".join(text.split()), validate=True)
-                except (binascii.Error, ValueError) as error:
-                    raise VFSError(f"Неверный base64 в файле {child_name}") from error
-            else:
-                raise VFSError(f"Неизвестная кодировка: {encoding}")
-            node = File(child_name, data)
+            node = read_file(child, child_name)
         directory.children[child_name] = node
     return directory
 
 
 def load_vfs(path):
-    """Читает XML, возвращает корневую папку. Исходный файл не изменяется."""
+    """Читает XML, возвращает корень, не изменяя исходный файл."""
     try:
         element = ET.parse(path).getroot()
     except FileNotFoundError as error:

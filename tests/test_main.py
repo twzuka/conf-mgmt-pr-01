@@ -4,11 +4,11 @@ import io
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from unittest import mock
 
 from src import main as shell
-from pathlib import Path
 
 VFS_PATH = str(Path(__file__).resolve().parents[1] / "vfs" / "minimal.xml")
 
@@ -285,16 +285,19 @@ class MainTests(unittest.TestCase):
     """Проверка точки входа."""
 
     def test_missing_vfs_parameter(self):
+        """Без обязательного пути argparse возвращает ошибку."""
         with redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as error:
                 shell.main([])
         self.assertEqual(error.exception.code, 2)
 
     def test_vfs_error_stops_before_script_and_repl(self):
+        """Ошибка VFS предотвращает выполнение сценария и REPL."""
         with mock.patch.object(shell, "run_startup_script") as script:
             with mock.patch.object(shell, "run_repl") as repl:
                 result, output = call_and_capture(shell.main, [
-                    "--vfs-path", VFS_PATH + ".missing", "--script", "startup.txt"
+                    "--vfs-path", VFS_PATH + ".missing",
+                    "--script", "startup.txt"
                 ])
         self.assertEqual(result, 1)
         self.assertIn("VFS error:", output)
@@ -302,6 +305,7 @@ class MainTests(unittest.TestCase):
         repl.assert_not_called()
 
     def test_invalid_vfs_stops_before_repl(self):
+        """Повреждённая VFS не запускает REPL."""
         path = str(Path(VFS_PATH).with_name("invalid.xml"))
         with mock.patch.object(shell, "run_repl") as repl:
             result, output = call_and_capture(shell.main, ["--vfs-path", path])
@@ -310,11 +314,17 @@ class MainTests(unittest.TestCase):
         repl.assert_not_called()
 
     def test_vfs_is_loaded_before_startup_script(self):
-        with mock.patch.object(shell, "load_vfs", wraps=shell.load_vfs) as loader:
+        """VFS загружается до выполнения стартового сценария."""
+        with mock.patch.object(
+            shell, "load_vfs", wraps=shell.load_vfs
+        ) as loader:
             def run_script(*args):
+                """Проверяет порядок вызова загрузчика и сценария."""
                 loader.assert_called_once_with(VFS_PATH)
                 return False
-            with mock.patch.object(shell, "run_startup_script", side_effect=run_script):
+            with mock.patch.object(
+                shell, "run_startup_script", side_effect=run_script
+            ):
                 result, _ = call_and_capture(shell.main, [
                     "--vfs-path", VFS_PATH, "--script", "startup.txt"
                 ])
@@ -352,4 +362,3 @@ class MainTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
