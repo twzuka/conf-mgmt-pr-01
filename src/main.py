@@ -196,7 +196,6 @@ def main(arguments=None):
         return 1
     directories, files = count_nodes(vfs_root)
     print(f"VFS loaded: {directories} directories, {files} files")
-    # vfs_root остаётся в памяти до завершения main.
     if config.script is not None:
         should_continue = run_startup_script(
             config.script, config.prompt
@@ -209,4 +208,3 @@ def main(arguments=None):
 
 if __name__ == "__main__":
     sys.exit(main())
-
