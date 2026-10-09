@@ -7,7 +7,8 @@ import socket
 import sys
 
 if __package__:
-    from .commands import COMMANDS
+    from .commands import COMMANDS as READ_COMMANDS
+    from .mutations import COMMANDS as WRITE_COMMANDS
     from .options import require_no_arguments
     from .session import CommandError, ShellState
     from .vfs import VFSError, count_nodes, load_vfs
@@ -15,7 +16,8 @@ else:
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from src.commands import COMMANDS
+    from src.commands import COMMANDS as READ_COMMANDS
+    from src.mutations import COMMANDS as WRITE_COMMANDS
     from src.options import require_no_arguments
     from src.session import CommandError, ShellState
     from src.vfs import VFSError, count_nodes, load_vfs
@@ -28,6 +30,7 @@ EXIT_COMMAND = "exit"
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
 SCRIPT_ENCODING = "utf-8"
+COMMANDS = {**READ_COMMANDS, **WRITE_COMMANDS}
 
 
 def create_argument_parser():
