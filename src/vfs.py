@@ -3,7 +3,7 @@
 import base64
 import binascii
 from dataclasses import dataclass, field
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as element_tree
 
 
 @dataclass
@@ -97,10 +97,10 @@ def read_directory(element, name):
 def load_vfs(path):
     """Читает XML, возвращает корень, не изменяя исходный файл."""
     try:
-        element = ET.parse(path).getroot()
+        element = element_tree.parse(path).getroot()
     except FileNotFoundError as error:
         raise VFSError(f"Файл не найден: {path}") from error
-    except (ET.ParseError, UnicodeError, ValueError) as error:
+    except (element_tree.ParseError, UnicodeError, ValueError) as error:
         raise VFSError(f"Неверный формат XML: {error}") from error
     except OSError as error:
         raise VFSError(f"Не удалось прочитать VFS: {error}") from error
